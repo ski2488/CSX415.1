@@ -1,0 +1,114 @@
+---  
+title: "Assignment 1"
+author: Michael Raminski  
+date: "October 11, 2017"  
+output: 
+  html_document:  
+    toc: yes  
+
+---  
+email address: mraminski@gmail.com
+  
+***
+Instructions: answer the questions below,  Do not use the R interpreter or the Internet during the quiz  
+
+Use only base R code in your answers , no use of packages unless specified.  No use of for (or any other type of) loops on any questions.
+
+(additional instructions and/or comments)
+
+
+# Problem 1  
+  
+Given a 10 element numeric vector v, give an R statement that adds the mean of v to every individual element of v and assigns the result to v1  
+
+```{r, comment=NA}
+    v <- c(1:10)
+    v1 <- v + mean(v)
+    v1
+```
+  
+# Problem 2  
+  
+Given a character vector vchars, write a single statement that prints the number of missing values in vchar  
+  
+```{r, comment=NA}
+    vchars <- c("a", "b", "c", NA, "d", "e", NA)
+    missingvchars <- sum(is.na(vchars))
+    missingvchars
+```
+
+# Problem 3  
+  
+Given a numeric vector nvec, write a single R statement that assigns a zero to every negative element present in nvec
+  
+```{r, comment=NA}
+    nvec <- c(-5:5)
+    nvec[nvec < 0] <- 0
+    nvec
+```
+
+# Problem 4  
+  
+Given three vectors a, b, and d, create a fourth vector consisting of the concatenation of d, b, and a in that order
+  
+```{r, comment=NA}
+    a <- c(3:1)
+    b <- c(6:4)
+    d <- c(9:7)
+    c(d,b,a)
+```
+
+# Problem 5  
+  
+What is printed by the following R statement?
+print(typeof(c(TRUE, 317, 412, "2007-03-01"))
+
+```{r, comment=NA}
+    print(typeof(c(TRUE, 317, 412, "2007-03-01")))
+```
+
+# Problem 6
+  
+A data frame df has the following columns:
+
+(A) Write a single R statement that deletes all the rows in df for which scores is less than the mean of scores
+
+```{r, comment=NA}
+    scores <- c(79.51508, 67.84057, 74.89246, 75.71270, 74.18168, 75.73072, 77.76586, 76.790, 78.888888, 79.999999)
+    eval <- c("k", "p", "i", "d", "c", "z", "m", "j", "t", "u")
+    df <- data.frame(scores, eval)
+    df
+    df[df$scores > mean(df$scores),]
+```
+
+(B) Add a new column names new_scores to df consisting of a normally distributed random vector with mean 100 and standard deviation 5
+
+```{r, comment=NA}
+    df$new_scores <- rnorm(10,100,5)
+    df
+```
+
+# Problem 7  
+  
+What is the R statement used to install a package?  Load a package?  Should the package be installed every time it is loaded?
+
+```{r, comment=NA, warning=FALSE}
+    #install.packages("dplyr")
+    library(dplyr)
+    #the package does not need to be re-installed each time it is loaded
+```
+
+# Problem 8
+  
+Write an R function normalize that normalizes a numeric vector or matrix between 0 and 1 using the following formula:
+
+x - min(x) / max(x) - min(x)
+
+Use normalize to normalize a vector v with 10 uniformly distributed random numbers between 100 and 200
+
+```{r, comment=NA}
+    normalize_0_1 <- function(x)
+    (x-min(x)) / (max(x) - min(x))
+    v <- runif(10,100,200)
+    normalize_0_1(v) 
+```

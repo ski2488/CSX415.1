@@ -1,0 +1,228 @@
+---  
+title: "Programming Assignment 3"
+author: Michael Raminski (mraminski@gmail.com)  
+date: "November 19, 2017"  
+output: 
+  html_document:  
+    toc: yes  
+
+---  
+email address: mraminski@gmail.com
+  
+***
+
+#Bureau of Labor Statistics Project
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=TRUE, include=FALSE}
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(stringr)
+library(leaflet)
+library(knitr)
+library(tidyr)
+library(lubridate)
+library(maps)
+library(geojsonio)
+library(spdplyr)
+library(scales)
+library(rgdal)
+library(shiny)
+library(htmlwidgets)
+library(sp)
+library(jsonlite)
+library(tibble)
+library(RColorBrewer)
+library(rsconnect)
+```
+
+#Part 1
+####Using the sf_oak_metro.csv file (source: https://www.bls.gov/lau/lauov.htm), I looked to capture historical statistics; including: Unemployment Rate, Umemployed Persons, Employed Persons, and Labor Force for the Bay Area (San Francisco, Oakland, Hayward CA). The data was captured monthly and spanned from January 1, 1990 to December 31, 2016. Below, I have included some charts that show the trend in these employment statistics. The Unemployment Rate and the Unemployed Persons followed a trend that would seem to be reflective of the national economy. However, the Employed Persons and Labor Force show a fairly steady climb that seems to be more unique to the growth of the local economy in the Bay Area. 
+
+##Read in data, convert from wide to long, manipulate data for graphing purposes
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=TRUE, include=TRUE, echo = TRUE, comment=NA}
+sf_oak_metro <- read.csv("sf_oak_metro.csv")
+
+long_sf_oak_metro <- sf_oak_metro %>% 
+  gather(valuation, value, Jan.1990:Dec.2016) #convert from wide to long
+kable(long_sf_oak_metro) %>% 
+  head
+
+long_sf_oak_metro <- long_sf_oak_metro %>% 
+  mutate(date = as.Date(gsub("[.]", "01", valuation), "%B%d%Y"), #convert to date format
+         year = year(date))
+
+long_sf_oak_metro %>% head
+```
+
+##Graph data using ggplot
+###Filter data with dplyr to get subset of only "Unemployment Rate" data, then graph results
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=TRUE, include=TRUE, echo = TRUE, comment=NA}
+unemployment_rate <- long_sf_oak_metro %>% 
+  filter(Series.ID == "LAUMT064186000000003") %>% #data set with only Unemployment Rate
+  select(value, date, year)
+unemployment_rate %>% head
+
+unemployment_rate %>% 
+  ggplot(aes(date, value, color = year)) +
+  geom_line() +
+  geom_point(pch=17, size=2) +
+  geom_smooth(method="loess", color="red", linetype=2, span = .5) +
+  scale_x_date(labels = date_format("%b-%y"), date_breaks = "1 year") +
+  theme(axis.text.x = element_text(angle=45)) +
+  labs(title="Bay Area Historical Unemployment Rate (1990 - 2016)", x="Month-Year", y="Unemployment Rate (%)")
+```
+
+###Filter data with dplyr to get subset of only "Unemployed Persons" data, then graph results
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=TRUE, include=TRUE, echo = TRUE, comment=NA}
+unemployment <- long_sf_oak_metro %>% 
+  filter(Series.ID == "LAUMT064186000000004") %>% #data set with only Unemployed Persons
+  select(value, date, year)
+unemployment %>% head
+
+unemployment %>% 
+  ggplot(aes(date, value, color = year)) +
+  geom_line() +
+  geom_point(pch=17, size=2) +
+  geom_smooth(method="loess", color="red", linetype=2, span = .5) +
+  scale_x_date(labels = date_format("%b-%y"), date_breaks = "1 year") +
+  theme(axis.text.x = element_text(angle=45)) +
+  labs(title="Bay Area Historical Unemployed Persons (1990 - 2016)", x="Month-Year", y="Unemployed Persons")
+```
+
+###Filter data with dplyr to get subset of only "Employed Persons" data, then graph results
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=TRUE, include=TRUE, echo = TRUE, comment=NA}
+employment <- long_sf_oak_metro %>% 
+  filter(Series.ID == "LAUMT064186000000005") %>% #data set with only Employed Persons
+  select(value, date, year)
+employment %>% head
+
+employment %>% 
+  ggplot(aes(date, value, color = year)) +
+  geom_line() +
+  geom_point(pch=17, size=2) +
+  geom_smooth(method="loess", color="red", linetype=2, span = .5) +
+  scale_x_date(labels = date_format("%b-%y"), date_breaks = "1 year") +
+  theme(axis.text.x = element_text(angle=45)) +
+  labs(title="Bay Area Historical Employed Persons (1990 - 2016)", x="Month-Year", y="Employed Persons")
+```
+
+###Filter data with dplyr to get subset of only "Labor Force" data, then graph results
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=TRUE, include=TRUE, echo = TRUE, comment=NA}
+laborforce <- long_sf_oak_metro %>% 
+  filter(Series.ID == "LAUMT064186000000006") %>% #data set with only Labor Force
+  select(value, date, year)
+laborforce %>% head
+
+laborforce %>% 
+  ggplot(aes(date, value, color = year)) +
+  geom_line() +
+  geom_point(pch=17, size=2) +
+  geom_smooth(method="loess", color="red", linetype=2, span = .5) +
+  scale_x_date(labels = date_format("%b-%y"), date_breaks = "1 year") +
+  theme(axis.text.x = element_text(angle=45)) +
+  labs(title="Bay Area Historical Labor Force (1990 - 2016)", x="Month-Year", y="Labor Force")
+```
+
+#Part 2
+####Using employment data from the "gz_2010_us_050_00_20m.json" and "california_counties_monthly_employment_2016.tsv" files, I will create two maps. The first, is a static choropleth map showing the California unemployment rates by county for December 2016. The second map, is an interactive chorpleth map, using Shiny, where the user can toggle between all months of 2016 to see the monthly California unemployment rates by county. 
+
+##Read in data from tsv and json files and manipulate data using dplyr
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=TRUE, include=TRUE, echo = TRUE, comment=NA}
+ca_counties_tsv <- read_tsv("california_counties_monthly_employment_2016.tsv") %>% 
+  mutate(month = month(period)) #Add month number 1-12
+ca_counties_tsv <- ca_counties_tsv %>% 
+  select(fips_county, unemployed_rate, month) #reduce the data set to only the relevant fields
+ca_counties_tsv %>% head
+
+ca_counties_json <- geojson_read("gz_2010_us_050_00_20m.json", what = "sp")
+ca_counties_json <- ca_counties_json %>% 
+  filter(STATE == "06") %>% #Filter dataset down to just California 
+  mutate(fips_county = COUNTY)
+ca_counties_json %>% head
+```
+
+##Merge datasets using sp package
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=TRUE, include=TRUE, echo = TRUE, comment=NA}
+ca_joined <- sp::merge(ca_counties_json, ca_counties_tsv, duplicateGeoms = TRUE)
+ca_joined %>% head
+```
+
+##Show choropleth map for California Unemployment Rates in December by Quantile (Darker Red shows higher unemployment)
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=TRUE, include=TRUE, echo = TRUE, comment=NA}
+ca_joined_dec <- ca_joined %>% 
+  filter(month == 12) #show December 2016 only
+ca_joined_dec %>% head
+
+pal <- colorQuantile("Reds", domain = ca_joined_dec$unemployed_rate, n=10)
+map <- leaflet(ca_joined_dec)
+map %>% addPolygons(
+  fillColor = ~pal(ca_joined_dec$unemployed_rate),
+  weight = 2,
+  opacity = 1,
+  color = "white",
+  dashArray = "3",
+  fillOpacity = 0.7) %>% 
+addLegend(pal = pal, values = ~ca_joined_dec$unemployed_rate, opacity = 0.7, title = "Unemployment Quantile",
+                position = "bottomright")
+```
+
+##Show choropleth map for California on Shiny App, allowing user to toggle between months (code not active in Markdown file). 
+Link to Shiny App:
+https://ski2488.shinyapps.io/RaminskiAssignment3/
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=FALSE, include=TRUE, echo = TRUE, comment=NA}
+shinyUI(fluidPage(
+  titlePanel("Interactive California Employment Statistics Map"),
+  sidebarLayout(sidebarPanel(
+    selectInput("MonthSelector",
+                label = "Select the Month:",
+                choice = c(1:12),
+                selected = 12)
+  ),
+  mainPanel(
+    leafletOutput("showThePlot")
+  ))
+))
+
+shinyServer(function(input, output) {
+  filtered_month <- reactive ({ca_joined %>% filter(month == input$MonthSelector)
+  })
+  colorpal <- reactive({colorQuantile("Reds", domain = ca_joined$unemployed_rate, n=10)
+  })  
+  
+  output$showThePlot <- renderLeaflet({
+    leaflet(filtered_month()) %>% addPolygons(
+      fillColor = ~pal(ca_joined$unemployed_rate),
+      weight = 2,
+      opacity = 1,
+      color = "white",
+      dashArray = "3",
+      fillOpacity = 0.7) %>% 
+      addLegend(pal = pal, values = ~ca_joined$unemployed_rate, opacity = 0.7, title = "Unemployment Quantile",
+                position = "bottomright")
+  })
+  
+  observe({
+    pal <- colorpal()
+    
+    leafletProxy("showThePlot", data = filtered_month()) %>% addPolygons(
+      fillColor = ~pal(ca_joined$unemployed_rate), 
+      weight = 2,
+      opacity = 1,
+      color = "white",
+      dashArray = "3",
+      fillOpacity = 0.7) 
+    #      addLegend(pal = pal, values = ~ca_joined$unemployed_rate, opacity = 0.7, title = "Unemployment Quantile",
+    #                                    position = "bottomright")
+  })
+})
+```

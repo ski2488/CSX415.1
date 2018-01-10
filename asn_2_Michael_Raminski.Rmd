@@ -1,0 +1,147 @@
+---  
+title: "Programming Assignment 2"
+author: Michael Raminski (mraminski@gmail.com)  
+date: "October 31, 2017"  
+output: 
+  html_document:  
+    toc: yes  
+
+---  
+email address: mraminski@gmail.com
+  
+***
+
+#AOL Search Data Project
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=TRUE, include=FALSE}
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(stringr)
+```
+
+##Read in the data (random sample of 100,000 records), and examine structure  
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=TRUE, include=TRUE, echo = FALSE, comment=NA}
+set.seed(1234)
+user_searches <- sample_n(read_tsv('user_searches.txt'),100000)  #take sample of 100K records to avoid calculation delays
+dim(user_searches)
+glimpse(user_searches)
+str(user_searches)
+head(user_searches)
+```
+
+##Convert column headings to snake_case  
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=TRUE, include=TRUE, echo = FALSE, comment=NA}
+fix_column_names <- function(x) {
+  gsub("(.)([A-Z][a-z,A-Z]+)", "\\1_\\2", x) # Separate w/ underscores on capitalization
+}
+
+names(user_searches) <- user_searches %>%
+  colnames %>%
+  fix_column_names
+
+user_searches <- user_searches %>% 
+  arrange(Anon_ID, Query_Time)  #arrange by ID and Query Time (ascending)
+
+user_searches %>% head
+```
+
+##Add new fields to user_search dataset with "mutate"
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=TRUE, include=TRUE, echo = FALSE, comment=NA}
+user_searches <- user_searches %>% 
+  mutate(first_user_record = if_else(is.na(lag(Anon_ID)), "First", if_else(lag(Anon_ID) != Anon_ID, "First", "Not First")),  #declare whether this is the first user record
+         time_difference = if_else(first_user_record == "First", difftime(Query_Time, Query_Time, units='mins'), difftime(Query_Time, lag(Query_Time), units='mins')),  #calculate the time difference for those records that arent the first user record
+         first_session_record = if_else(first_user_record == "First", "First", if_else(time_difference > 30, "First", "Extended")),  #based on time difference, declare whether this is the first session record
+         unique_test = if_else(first_session_record == "First", 1, 0),  #assign 1 to first session record, 0 otherwise, in order to aggregate the records per session
+         annon_ID = Anon_ID,  #Required
+         session_sequence_number = cumsum(unique_test),  #Required
+         session_id = paste(annon_ID, session_sequence_number, sep="_"),  #Required
+         click_count = if_else(is.na(Click_URL), 0, 1),  #Count "clicks per record" in order to aggregate later per session
+         search_words = str_count(Query, "\\S+"))  #Count "words per search" in order to aggregate later per session
+
+user_searches %>% head
+```
+
+##Aggregate data by unique session with "group_by" and "aggregate"
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=TRUE, include=TRUE, echo = FALSE, comment=NA}
+group_sessions <- user_searches %>% group_by(session_id) %>% 
+  summarise(number_searches = n(),  #Required
+            User_ID = mean(annon_ID),
+            session_started_at = min(Query_Time),  #Required
+            session_ended_at = max(Query_Time) + (30*60),  #Required (adding 30 minutes to the last search start time)
+            session_length = max(Query_Time) - min(Query_Time),  #instead of adding in the 30 minutes to the "end" of the session, look at sessions from "start-to-start"
+            number_clicks = sum(click_count),  #Required
+            mean_item_rank = mean(Item_Rank, na.rm = TRUE),  #Required
+            mean_number_search_terms = mean(search_words))  #Required
+
+group_sessions %>% head
+```
+
+##Aggregate data by unique User ID with "group_by" and "aggregate"
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=TRUE, include=TRUE, echo = FALSE, comment=NA}
+group_users <- group_sessions %>% group_by(User_ID) %>% 
+  summarise(number_sessions = n(),  #Count sessions per user for histogram
+            mean_session_length = mean(session_length))  #Find average session duration per user for histogram
+
+group_users %>% head
+```
+ 
+##Create summary charts using "ggplot"
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=TRUE, include=TRUE, echo = FALSE, comment=NA}
+ggplot(group_sessions, aes(x=session_length)) + 
+  geom_histogram(fill="blue") +
+  labs(title="Session Duration per Session", x="Duration (Minutes)", y="Count") #This includes sessions of 0 minutes
+
+ggplot(group_sessions, aes(x=session_length)) + 
+  geom_histogram(fill="blue") +
+  labs(title="Session Duration (excluding 0 length sessions)", x="Duration (Minutes)", y="Count") +
+  xlim(.0001,max(group_sessions$session_length)+1) #This does not include sessions of 0 minutes (sessions without a second activity)
+
+ggplot(group_sessions, aes(x=number_clicks)) + 
+  geom_histogram(fill="blue") +
+  labs(title="Clicks per Session", x="Clicks", y="Count") 
+
+ggplot(group_users, aes(x=number_sessions)) + 
+  geom_histogram(fill="blue") +
+  labs(title="Number of Sessions per User", x="Clicks", y="Count") 
+
+ggplot(group_users, aes(x=mean_session_length)) + 
+  geom_histogram(fill="blue") +
+  labs(title="Average Session Duration per User", x="Clicks", y="Count") 
+
+ggplot(group_users, aes(x=mean_session_length)) + 
+  geom_histogram(fill="blue") +
+  labs(title="Average Session Duration per User (excluding 0 average sessions)", x="Clicks", y="Count") +
+  xlim(.0001,max(group_users$mean_session_length)+1)
+
+ggplot(group_sessions, aes(x=mean_item_rank)) + 
+  geom_density(alpha=.3) +
+  labs(title="Mean Item Rank Clicked On", x="Mean Item Rank")  #chart distorted by max of 493
+
+ggplot(group_sessions, aes(x=mean_item_rank)) + 
+  geom_density(alpha=.3) +
+  labs(title="Mean Item Rank Clicked On (condensed scale)", x="Mean Item Rank") +
+  xlim(0,50)  #Fix scale to condense, actual max almost 500
+
+ggplot(group_sessions, aes(x=mean_number_search_terms)) + 
+  geom_density(alpha=.3) +
+  labs(title="Average Number of Search Words per Session", x="Search Words", y="Percentage")  
+
+ggplot(group_sessions, aes(x=mean_number_search_terms)) + 
+  geom_density(alpha=.3) +
+  labs(title="Average Number of Search Words per Session (condensed scale)", x="Search Words", y="Percentage") +
+  xlim(0,20)  #Fix scale to condense, actual max almost 500
+
+ggplot(data=user_searches, aes(x=user_searches$search_words, y=user_searches$Item_Rank)) +
+  geom_point(pch=17, color="blue", size=2) +
+  geom_smooth(method="lm", color="red", linetype=2) +
+  labs(title="Regression of Item Rank on Search Words", x="Search Words", y="Item Rank") +
+  xlim(0,50) #Seems to be some positive correlation between the number of Search Words and the Item Rank although this is obscured somewhat by the outlier point
+```
+

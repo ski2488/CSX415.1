@@ -1,0 +1,903 @@
+---  
+title: "Programming Final Project"
+author: Michael Raminski (mraminski@gmail.com)  
+date: "December 4, 2017"  
+output: 
+  html_document:  
+    toc: yes  
+
+---  
+email address: mraminski@gmail.com
+  
+***
+
+#Final Project - NFL Odds and Statistics
+
+#####For this project, I wanted to look at various statistics relating to NFL football. Particularly, I wanted to see, over time, which teams have been the most and least successful; as well as how that compares to the sportbooks' prediction for their season outcome (the "future" bet). In doing so, there were several interesting patterns that were discovered, including:
+#####-The actual wins and point differentials show how dominant the New England Patriots have been, as well as how woeful several franchises, such as the Browns, Jaguars, and Raiders, have been.  
+#####-Under bets pay off slightly more than over bets. In researching this, it seems that psychologically, sports bettors prefer to bet Overs- they would rather bet for something to happen rather than something to not happen. As a result, it seems that the sportsbooks will adjust their numbers slightly higher to protect themselves from the potential exposure.
+#####-The sportsbooks seem to have gotten dramatically more accurate with their futures predictions starting in the 2009 season. Their average Absolute Future Win Miss dropped more than 10 games, or approximately 12.5%. This could be the result of using more sophisticated data and analytical approaches in the new era of Big Data. 
+#####-The data shows some trend of the Percent of Over wins dropping as the Future Win prediction gets larger, which would be expected; however, the pattern is "spikey" and not incredibly strong. Although, there do seem to be potential "sweet spots" for Overs at 5.5, 6, and 11.5 games. As well as Unders at 5, 7, 8 and 10 wins.
+
+####Data Issues: My data was comprised of two sources:
+#####-"Historical_Futures.csv" - giving the historical futures put out by the sportsbooks (source: http://www.sportsoddshistory.com/nfl-odds/). This required some manual work as the seasons were linked to different pages and unfortunately not provided in a single database. 
+#####-"Historical_Standings.csv" - giving the historical season results for each team (source: http://www.footballdb.com/standings/). This also required some manual work  as the seasons were linked to different pages. 
+#####-There is actually a sparse amount of data that I was able to find, particularly on the historical odds, which I believe that the sportsbooks keep a pretty tight lid on. 
+
+####Data Challenges: In tidying my data, there were a few issues that needed to be solved for:
+#####-The data went back to 2000, but to capture the league as its currently constructed, I needed to start my data set beyond 2002 when the Houston Texans were founded. Because I wanted to include each teams previous year wins, I moved the starting season up to 2003. This way, there will also be the same number of teams each year, so that aggregate statistics can be compared fairly
+#####-The Indianapolis Colts did not get a future win prediction for the 2011 season. After a little research, I found out that this was the year that their star quarterback, Peyton Manning, was injured going into the season. Because of the uncertainty of whether he would play or whether the Colts would be using a backup quarterback for the season, the sportsbooks weren't able to post a win total. Because it is only one team in one year, I have left it in as a blank, removed NAs from some of my calculations, and called attention to it's impact in some of the visualizations.
+#####-The St Louis Rams relocated to Los Angeles just last year, so the data showed both "St Louis Rams" and "Los Angeles Rams". In order to show the data at the franchise level, and to capture the current construction of the league, I replaced historical "St Louis Rams" records with "Los Angeles Rams".
+
+####Definitions:
+#####-"Futures" ("Predicted Wins") - the sportsbooks' preseason prediction for the total games each team will win in the coming season
+#####-"Actual Wins" - the actual number of games a team won in a given season 
+#####-"Actual vs Predicted Wins" - The Actual Wins less the Predicted Wins
+#####-"Settlement Week" - The week of the NFL season when the bet pays off (the correctness of the future prediction is officially validated)
+#####-"Point Differential" - The difference in aggregate points scored by a team versus allowed to be scored against a team (a positive number means that, for the season, a team scored more points than they let up). This can perhaps be a better measure of success, rather than just season wins, which may be subject to more anomolies
+#####-"Absolute Actual vs Predicted" ("Total Futures Win Miss") - the absolute value of the Actual Wins less the Predicted Wins (regardless of direction over/under- how much did the sportsbook miss on their prediction). This will show overall how accurate the sportsbooks are at predicting season wins
+#####-"Over" - when a team wins more games than was predicted
+#####-"Under" - when a team wins fewer games than was predicted
+#####-"Push" - when a team wins the exact same number of games as predicted
+
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=TRUE, include=FALSE}
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(stringr)
+library(leaflet)
+library(knitr)
+library(tidyr)
+library(lubridate)
+library(maps)
+library(geojsonio)
+library(spdplyr)
+library(scales)
+library(rgdal)
+library(shiny)
+library(htmlwidgets)
+library(sp)
+library(jsonlite)
+library(tibble)
+library(RColorBrewer)
+library(rsconnect)
+library(readr)
+library(devtools)
+```
+
+##Part 1 - Load in Data, Transform to Tidy Format, Join Datasets 
+
+###Read in First Data Set "Historical_Futures.csv" and name "futures"
+####Analyze structure of data set with dim() and glimpse()
+####Use fix_column_names function as dplyr verb to replace old variable names with snake case
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=TRUE, include=TRUE, echo = TRUE, comment=NA}
+futures <- read_csv("Historical_Futures.csv")
+futures %>% dim
+futures %>% glimpse
+
+fix_column_names <- function(x) {
+  s <- gsub("\\.", "_", x) # Replace dots with underscores.
+  s <- gsub("(.)([AZ][az]+)","\\1_\\2", s) # Separate w/ underscores on capitalization
+  s <- tolower(gsub("([az09])([AZ])","\\1_\\2", s)) # lowercase
+  s <- gsub("__","_", s) # double to single underscore
+  s <- gsub("^[_,.]", "", s) # del first char underscore "_" or period "."
+  s <- gsub(" ", "_", s) # remove spaces
+}
+
+names(futures) <- futures %>%
+  colnames %>%
+  fix_column_names
+futures %>% head
+```
+
+###Transform "futures" into Tidy Format
+####Use dplyr with arrange(), filter(), mutate(), and select() commands to get data tidy
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=TRUE, include=TRUE, echo = TRUE, comment=NA}
+futures <- futures %>% 
+
+  mutate(team = gsub("St Louis","Los Angeles", team)) %>%  #change historic "St Louis Rams" to "Los Angeles Rams"
+         
+  arrange(year, team) %>% #arrange by Year and Team Name (ascending, alphabetical)       
+         
+  mutate(actual_vs_predicted = actual_wins - win_total, #show the difference in actual and predicted wins
+         settlement_week = as.integer(gsub("Week ", "", week_bet_settled)), #get rid of "Week " and just show integer value for week
+         odds_over = as.integer(over_odds), #convert from character to integer
+         odds_under = as.integer(under_odds), #convert from character to integer
+         predicted_wins = win_total, #rename column
+         last_year_wins_f = lag(actual_wins, 32)) %>% 
+  
+  select(year, team, predicted_wins, odds_over, odds_under, actual_wins, actual_vs_predicted, result, settlement_week, last_year_wins_f) %>% 
+  filter(year >= "2003" & year < "2017" & is.na(predicted_wins) == FALSE) #Only use data beyond 2003 (but not current 2017 year which isn't complete), this is where odds are provided, all current franchises are in league, and current conferences are in place
+
+futures %>% head
+```
+
+###Read in Second Data Set "Historical_Standings.csv" and name "standings"
+####Analyze structure of data set with dim() and glimpse()
+####Use fix_column_names function as dplyr verb to replace old variable names with snake case
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=TRUE, include=TRUE, echo = TRUE, comment=NA}
+standings <- read_csv("Historical_Standings.csv")
+standings %>% dim
+standings %>% glimpse
+
+fix_column_names <- function(x) {
+  s <- gsub("\\.", "_", x) # Replace dots with underscores.
+  s <- gsub("(.)([AZ][az]+)","\\1_\\2", s) # Separate w/ underscores on capitalization
+  s <- tolower(gsub("([az09])([AZ])","\\1_\\2", s)) # lowercase
+  s <- gsub("__","_", s) # double to single underscore
+  s <- gsub("^[_,.]", "", s) # del first char underscore "_" or period "."
+  s <- gsub(" ", "_", s) # remove spaces
+}
+
+names(standings) <- standings %>%
+  colnames %>%
+  fix_column_names
+standings %>% head
+```
+
+###Transform "standings" into Tidy Format
+####Use dplyr with arrange(), filter(), mutate(), and select() commands to get data tidy
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=TRUE, include=TRUE, echo = TRUE, comment=NA}
+standings <- standings %>% 
+
+  mutate(team = gsub("St. Louis","Los Angeles",gsub(" - ","",gsub("^[x - ,y - ,z - ]", "", team)))) %>% 
+  
+  arrange(year, team) %>% #arrange by Year and Team Name (ascending, alphabetical)
+  
+  mutate(wins = w, #make name more intuitive
+         points_for = pf, #make name more intuitive
+         points_against = pa, #make name more intuitive
+         point_differential = pf - pa, #calculate point differential
+         last_year_wins_s = lag(wins, 32), #calculate last year wins
+         last_year_point_differential = lag(point_differential, 32)) %>% #calculate last year point differential
+  
+  filter(year >= "2003") %>% #Only use data beyond 2003 to match futures
+  
+  select(-(w:nfc))
+standings %>% head
+```
+
+###Join Data Sets "futures" and "standings" and name "joined_data"
+####Use dplyr full_join() command, check dimensions to make sure the number of rows matches individual data sets
+####Use dplyr mutate() command to create a variable "win_check" that calculates the difference in the wins reported by each data set
+####Use dplyr summarise() command to get the sum of the "win_check" variable, and confirm they are both 0
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=TRUE, include=TRUE, echo = TRUE, comment=NA}
+joined_data <- full_join(futures, standings)
+joined_data %>% dim
+joined_data %>% head
+
+joined_data <- joined_data %>% 
+  mutate(win_check = actual_wins - wins,
+         last_year_win_check = last_year_wins_f - last_year_wins_s) 
+
+win_check <- joined_data %>% 
+  summarise(total_win_diff = sum(win_check, na.rm = TRUE),
+            total_Last_year_win_diff = sum(last_year_win_check, na.rm = TRUE))
+win_check
+```
+
+###Transform "joined_data" into Tidy Format
+####Use dplyr arrange(), mutate(), and select() commands to get data tidy
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=TRUE, include=TRUE, echo = TRUE, comment=NA}
+joined_data <- joined_data %>% 
+  arrange(year, team) %>% #arrange by Year and Team Name (ascending, alphabetical)
+
+  mutate(absolute_actual_vs_predicted = abs(actual_vs_predicted)) %>% 
+
+  select(-wins,-win_check,-last_year_win_check)
+joined_data %>% head
+```
+
+
+
+##Part 2 - Exploratory Data Analysis
+###Use "joined_data" set to look at the distribution of key metrics using ggplot()
+
+####Predicted Wins
+#####The boxplot shows the difference in the distribution of futures by each year. Years such as 2008 and 2013 have very narrow interquartile ranges, while 2011 has a large interquartile range. Additionally, a majority of the medians are above the 8 win mark, which may suggest that futures skew to the high side. 
+#####The histogram shows, as we would expect, that the distribution of the futures are approximately normal around 8 wins
+#####Both the boxplot and histogram show that the range of futures is never less than 4.5 or greater than 12.
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=TRUE, include=TRUE, echo = TRUE, comment=NA}
+joined_data %>% 
+  ggplot(aes(year, predicted_wins)) +
+  geom_boxplot(aes(group = year), color = "blue", fill = "gray", outlier.color = "dark green") +
+  geom_hline(aes(yintercept = median(predicted_wins, na.rm = TRUE)), color = "red", linetype=2, size = 1, show.legend = FALSE) +
+  scale_x_continuous(breaks = c(2003:2016)) +
+  theme_light() +
+  labs(title="Predicted Wins (2003 - 2016)", x="Year", y="Predicted Wins")
+
+joined_data %>% 
+  ggplot() +
+  geom_histogram(aes(predicted_wins, fill = "orange"), color = "black", binwidth = .5, show.legend = FALSE) +
+  scale_x_continuous(breaks = seq(0,16,.5)) +
+  theme_light() +
+  labs(title="Predicted Wins (2003 - 2016)", x="Predicted Win Total", y="Total Count")
+```
+
+####Actual Wins
+#####The boxplot shows that the low wins for a given year ranges between 0 and 4, while the high wins ranges from 12 to 16.
+#####The histogram shows, as we would expect, that the distribution of the actual wins are approximately normal around 8 wins
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=TRUE, include=TRUE, echo = TRUE, comment=NA}
+joined_data %>% 
+  ggplot(aes(year, actual_wins)) +
+  geom_boxplot(aes(group = year), color = "blue", fill = "gray", outlier.color = "dark green") +
+  geom_hline(aes(yintercept = median(actual_wins, na.rm = TRUE)), color = "red", linetype=2, size = 1, show.legend = FALSE) +
+  scale_x_continuous(breaks = c(2003:2016)) +
+  theme_light() +
+  labs(title="Actual Wins (2003 - 2016)", x="Year", y="Actual Wins")
+
+joined_data %>% 
+  ggplot() +
+  geom_histogram(aes(actual_wins, fill = "orange"), color = "black", binwidth = 1, show.legend = FALSE) +
+  scale_x_continuous(breaks = seq(0,16,1)) +
+  theme_light() +
+  labs(title="Actual Wins (2003 - 2016)", x="Actual Wins Total", y="Total Count")
+```
+
+####Actual vs Predicted Wins
+#####Both the boxplot and the histogram show the data fairly well centered around 0.  
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=TRUE, include=TRUE, echo = TRUE, comment=NA}
+joined_data %>% 
+  ggplot(aes(year, actual_vs_predicted)) +
+  geom_boxplot(aes(group = year), color = "blue", fill = "gray", outlier.color = "dark green") +
+  geom_hline(aes(yintercept = median(actual_vs_predicted, na.rm = TRUE)), color = "red", linetype=2, size = 1, show.legend = FALSE) +
+  scale_x_continuous(breaks = c(2003:2016)) +
+  theme_light() +
+  labs(title="Actual vs Predicted Wins (2003 - 2016)", x="Year", y="Actual vs Predicted Wins")
+
+joined_data %>% 
+  ggplot() +
+  geom_histogram(aes(actual_vs_predicted, fill = "orange"), color = "black", binwidth = .5, show.legend = FALSE) +
+  scale_x_continuous(breaks = seq(-10,10)) +
+  theme_light() +
+  labs(title="Actual vs Predicted (2003 - 2016)", x="Actual vs Predicted", y="Total Count")
+```
+
+####Settlement Week
+#####Both plots show that a majority of futures aren't settled until week 17, meaning that the sports books are doing a good job predicting the actual win total, and that even a winning bet may require your money to be tied up for the entire 17-week season.
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=TRUE, include=TRUE, echo = TRUE, comment=NA}
+joined_data %>% 
+  ggplot(aes(year, settlement_week)) +
+  geom_boxplot(aes(group = year), color = "blue", fill = "gray", outlier.color = "dark green") +
+  geom_hline(aes(yintercept = median(settlement_week, na.rm = TRUE)), color = "red", linetype=2, size = 1, show.legend = FALSE) +
+  scale_x_continuous(breaks = c(2003:2016)) +
+  theme_light() +
+  labs(title="Settlement Week (2003 - 2016)", x="Year", y="Settlement Week")
+
+joined_data %>% 
+  ggplot() +
+  geom_histogram(aes(settlement_week, fill = "orange"), color = "black", binwidth = 1, show.legend = FALSE) +
+  scale_x_continuous(breaks = seq(1,18)) +
+  theme_light() +
+  labs(title="Settlement Week (2003 - 2016)", x="Settlement Week", y="Total Count")
+```
+
+####Point Differential
+#####The boxplot shows an interesting picture. The New England Patriots undefeated season certainly sticks out as the top end of the 2007 upper whisker (as it does in the very far right of the histogram). There are also more outliers in 2016 than we've seen in any boxplots for other metrics.  
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=TRUE, include=TRUE, echo = TRUE, comment=NA}
+joined_data %>% 
+  ggplot(aes(year, point_differential)) +
+  geom_boxplot(aes(group = year), color = "blue", fill = "gray", outlier.color = "dark green") +
+  geom_hline(aes(yintercept = median(point_differential, na.rm = TRUE)), color = "red", linetype=2, size = 1, show.legend = FALSE) +
+  scale_x_continuous(breaks = c(2003:2016)) +
+  theme_light() +
+  labs(title="Point Differential (2003 - 2016)", x="Year", y="Point Differential")
+
+joined_data %>% 
+  ggplot() +
+  geom_histogram(aes(point_differential, fill = "orange"), color = "black", binwidth = 20, show.legend = FALSE) +
+  scale_x_continuous(breaks = seq(-500,500,50)) +
+  theme_light() +
+  labs(title="Point Differential (2003 - 2016)", x="Point Differential", y="Total Count")
+```
+
+####Absolute Actual vs Predicted
+#####This metric captures the absolute (positive or negative) miss by the future win prediction.
+#####The boxplot shows that the all-year median (red line) is right at 2 games. 2013 stands out as the year three teams (outliers) surprised to the extreme upside, with one team winning 8.5 more games than was predicted.   
+#####The histogram interestingly shows a fairly strong lognormal pattern. 
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=TRUE, include=TRUE, echo = TRUE, comment=NA}
+joined_data %>% 
+  ggplot(aes(year, absolute_actual_vs_predicted)) +
+  geom_boxplot(aes(group = year), color = "blue", fill = "gray", outlier.color = "dark green") +
+  geom_hline(aes(yintercept = median(absolute_actual_vs_predicted, na.rm = TRUE)), color = "red", linetype=2, size = 1, show.legend = FALSE) +
+  scale_x_continuous(breaks = c(2003:2016)) +
+  theme_light() +
+  labs(title="Absolute Actual vs Predicted (2003 - 2016)", x="Year", y="Absolute Actual vs Predicted")
+
+joined_data %>% 
+  ggplot() +
+  geom_histogram(aes(absolute_actual_vs_predicted, fill = "orange"), color = "black", binwidth = .5, show.legend = FALSE) +
+  scale_x_continuous(breaks = seq(0,16,.5)) +
+  theme_light() +
+  labs(title=" Absolute Actual vs Predicted (2003 - 2016)", x="Absolute Actual vs Predicted", y="Total Count")
+```
+
+###Use "joined_data" set to create a summary by year named "by_year"
+####Use dplyr group_by(), mutate() and summarise()
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=TRUE, include=TRUE, echo = TRUE, comment=NA}
+by_year <- joined_data %>% 
+  group_by(year) %>% 
+  
+  mutate(count_over = sum(result == "Over", na.rm = TRUE),
+         count_under = sum(result == "Under", na.rm = TRUE),
+         count_push = sum(result == "Push", na.rm = TRUE)) %>% 
+  
+  summarise(total_predicted_wins = sum(predicted_wins, na.rm = TRUE),  
+            total_scored = sum(points_for, na.rm = TRUE),
+            total_futures_win_miss = sum(absolute_actual_vs_predicted, na.rm = TRUE),
+            count_over = mean(count_over, na.rm = TRUE),
+            count_under = mean(count_under, na.rm = TRUE),
+            count_push = mean(count_push, na.rm = TRUE))
+by_year %>% head
+```
+
+####Total Points scored by Year
+#####There are clearly more and more points being scored every year, as has been permitted by various rule changes. 
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=TRUE, include=TRUE, echo = TRUE, comment=NA}
+by_year %>% 
+  ggplot(aes(year, total_scored)) +
+  geom_line(color = "black", size = 1.5) +
+  geom_smooth(method = "lm", color="orange", linetype=2, se = FALSE) +
+  scale_x_continuous(breaks = c(2003:2016)) +
+  theme_light() +
+  labs(title="Total Points Scored (2003 - 2016)", x="Year", y="Total Points Scored")
+```
+
+####Total Predicted Wins by Year
+#####This chart is interesting, it shows that in most years the aggregate of futures is higher than the total number of games. This is especially the case considering 2011 is understated by not having included the Indianapolis Colts. This suggests that the sportsbooks are skewing their futures toward the high side. This is likely because more bets are expected to come in on the Over. This suggests some opportunity for betting Unders. The tables suggest that Under hits the most, but not by a incredibly large margin. 
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=TRUE, include=TRUE, echo = TRUE, comment=NA}
+by_year %>% 
+  ggplot(aes(year, total_predicted_wins)) +
+  geom_line(color = "blue", size = 1.5) +
+  geom_hline(aes(yintercept = 256, color = "red"), linetype=2, size = 1, show.legend = FALSE) +
+  geom_text(aes(2003, 256.5, label = "Total Games per Season = 256", color = "red", hjust = 0.1), show.legend = FALSE) +
+  scale_x_continuous(breaks = c(2003:2016)) +
+  theme_light() +
+  labs(title="Total Predicted Wins (2003 - 2016)", x="Year", y="Wins Predicted")
+
+over_vs_under <- by_year %>% 
+  summarise(total_over = sum(count_over),
+            total_under = sum(count_under),
+            total_push = sum(count_push))
+over_vs_under
+
+over_vs_under_perc <- by_year %>% 
+  summarise(total_over_perc = sum(count_over) / (sum(count_over) + sum(count_under) + sum(count_push)),
+            total_under_perc = sum(count_under) / (sum(count_over) + sum(count_under) + sum(count_push)),
+            total_push_perc = sum(count_push) / (sum(count_over) + sum(count_under) + sum(count_push)))
+over_vs_under_perc
+```
+
+####Total Futures Wins Missed
+#####This chart shows the total of how much the sportsbooks are missing the total wins each year. They have shown a drastic improvement starting between the 2008 and 2009 seasons, perhaps the result of more sophisticated data and analytics.
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=TRUE, include=TRUE, echo = TRUE, comment=NA}
+all_year_avg <- by_year %>% 
+  summarise(average = mean(total_futures_win_miss))
+all_year_avg %>% head
+
+early_avg <- by_year %>% 
+  filter(year < "2009") %>% 
+  summarise(average = mean(total_futures_win_miss))
+early_avg %>% head
+
+late_avg <- by_year %>% 
+  filter(year >= "2009") %>% 
+  summarise(average = mean(total_futures_win_miss))
+late_avg %>% head
+
+by_year %>% 
+  ggplot(aes(year, total_futures_win_miss)) +
+  geom_line(color = "black", size = 1.5) +
+  geom_segment(aes(x = 2003, y = early_avg, xend = 2008, yend = early_avg), color = "dark green", linetype=2, size = 1) + 
+  geom_text(aes(2005, early_avg + 1, label = "2003 - 2008 Average"), color = "dark green") +
+  geom_hline(aes(yintercept = all_year_avg), color = "orange", linetype=2, size = 1) +
+  geom_text(aes(2009, all_year_avg + 1, label = "All Year Average"), color = "orange") +
+  geom_segment(aes(x = 2009, y = late_avg, xend = 2016, yend = late_avg), color = "red", linetype=2, size = 1) + 
+  geom_text(aes(2013, late_avg + 1, label = "2009 - 2016 Average"), color = "red") +
+  scale_x_continuous(breaks = c(2003:2016)) +
+  theme_light() +
+  labs(title="Total Futures Wins Missed (2003 - 2016)", x="Year", y="Total Futures Wins Missed")
+```
+
+###Use "joined_data" set to create a summary by year named "by_future"
+####Use dplyr group_by(), mutate() and summarise()
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=TRUE, include=TRUE, echo = TRUE, comment=NA}
+by_future <- joined_data %>% 
+  group_by(predicted_wins) %>% 
+  
+  mutate(count_over = sum(result == "Over", na.rm = TRUE),
+         count_under = sum(result == "Under", na.rm = TRUE),
+         count_push = sum(result == "Push", na.rm = TRUE)) %>% 
+  
+  summarise(count = n(),
+            avg_actual_vs_predicted = mean(actual_vs_predicted, na.rm = TRUE),  
+            avg_futures_win_miss = mean(absolute_actual_vs_predicted, na.rm = TRUE),
+            pct_over = mean(count_over) / (mean(count_over) + mean(count_under) + mean(count_push)),
+            pct_under = mean(count_under) / (mean(count_over) + mean(count_under) + mean(count_push)),
+            pct_push = mean(count_push) / (mean(count_over) + mean(count_under) + mean(count_push)))
+by_future %>% head
+```
+
+####Average Actual vs Predicted Wins
+#####The trend suggests that the higher the future, the less likely it is to go Over
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=TRUE, include=TRUE, echo = TRUE, comment=NA}
+by_future %>% 
+  ggplot(aes(predicted_wins, avg_actual_vs_predicted)) +
+  geom_line(color = "green", size = 1.5) +
+  geom_smooth(method = "lm", color="orange", linetype=2, se = FALSE) +
+  scale_x_continuous(breaks = seq(0,16,.5)) +
+  theme_light() +
+  labs(title="Average Actual vs Predicted Wins (2003 - 2016)", x="Predicted Wins", y="Average Actual vs Predicted Wins")
+```
+
+####Average Futures Win Miss
+#####This trend suggests the the sportsbooks are predicting the higher future totals more accurately. 
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=TRUE, include=TRUE, echo = TRUE, comment=NA}
+by_future %>% 
+  ggplot(aes(predicted_wins, avg_futures_win_miss)) +
+  geom_line(color = "green", size = 1.5) +
+  geom_smooth(method = "lm", color="orange", linetype=2, se = FALSE) +
+  scale_x_continuous(breaks = seq(0,16,.5)) +
+  theme_light() +
+  labs(title="Average Futures Win Miss (2003 - 2016)", x="Predicted Wins", y="Average Futures Win Miss")
+```
+
+####Percent Over
+#####There isn't too strong of a pattern in the percent of going Over by each future prediction. 
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=TRUE, include=TRUE, echo = TRUE, comment=NA}
+by_future %>% 
+  ggplot(aes(predicted_wins, pct_over)) +
+  geom_line(color = "green", size = 1.5) +
+  geom_smooth(method = "lm", color="orange", linetype=2, se = FALSE) +
+  scale_x_continuous(breaks = seq(0,16,.5)) +
+  geom_hline(aes(yintercept = .5), color = "gray", linetype=1, size = 1) +
+  theme_light() +
+  labs(title="Percent Over (2003 - 2016)", x="Predicted Wins", y="Percent Over")
+```
+
+####Percent Under
+#####This is a reverse of the previous chart. 
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=TRUE, include=TRUE, echo = TRUE, comment=NA}
+by_future %>% 
+  ggplot(aes(predicted_wins, pct_under)) +
+  geom_line(color = "green", size = 1.5) +
+  geom_smooth(method = "lm", color="orange", linetype=2, se = FALSE) +
+  scale_x_continuous(breaks = seq(0,16,.5)) +
+  geom_hline(aes(yintercept = .5), color = "gray", linetype=1, size = 1) +
+  theme_light() +
+  labs(title="Percent Under (2003 - 2016)", x="Predicted Wins", y="Percent Under")
+```
+
+###Use "joined_data" set to create a summary by year named "by_team"
+####Use dplyr group_by() and summarise()
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=TRUE, include=TRUE, echo = TRUE, comment=NA}
+by_team <- joined_data %>% 
+  group_by(team) %>% 
+  summarise(total_predicted_wins = sum(predicted_wins, na.rm = TRUE),  
+            total_actual_wins = sum(actual_wins, na.rm = TRUE),
+            total_actual_vs_predicted = sum(actual_vs_predicted, na.rm = TRUE),
+            total_futures_win_miss = sum(absolute_actual_vs_predicted, na.rm = TRUE),
+            total_scored = sum(points_for, na.rm = TRUE),
+            total_against = sum(points_against, na.rm = TRUE),
+            total_point_differential = sum(point_differential, na.rm = TRUE))
+by_team %>% head
+```
+
+####Total Predicted Wins
+#####This shows the teams that have been the heaviest favorites and the biggest dogs. 
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=TRUE, include=TRUE, echo = TRUE, comment=NA}
+by_team_sort_1 <- by_team %>%
+  arrange(total_predicted_wins) %>% 
+  mutate(team_ordered = factor(team, levels = team))
+
+by_team_sort_1 %>%
+  ggplot(aes(team_ordered, total_predicted_wins)) +
+  geom_bar(stat = "identity", fill = "orange") +
+  geom_hline(aes(yintercept = median(total_predicted_wins)), color = "red", linetype=2, size = 1) +
+  theme_light() +
+  coord_flip() +
+  labs(title="Total Predicted Wins (2003 - 2016)", x="Team", y="Total Predicted Wins")
+  
+top_5_predicted_wins <- by_team %>%
+  arrange(desc(total_predicted_wins)) %>%
+  select(team) %>% 
+  rename(Top_5 = team)
+top_5_predicted_wins %>% head(5) 
+
+bottom_5_predicted_wins <- by_team %>%
+  arrange(total_predicted_wins) %>%
+  select(team) %>% 
+  rename(Bottom_5 = team)
+bottom_5_predicted_wins %>% head(5)
+```
+
+####Total Actual Wins
+#####As expected, this shows a similar pattern as the previous chart. 
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=TRUE, include=TRUE, echo = TRUE, comment=NA}
+by_team_sort_2 <- by_team %>%
+  arrange(total_actual_wins) %>% 
+  mutate(team_ordered = factor(team, levels = team))
+
+by_team_sort_2 %>%
+  ggplot(aes(team_ordered, total_actual_wins)) +
+  geom_bar(stat = "identity", fill = "orange") +
+  geom_hline(aes(yintercept = median(total_actual_wins)), color = "red", linetype=2, size = 1) +
+  theme_light() +
+  coord_flip() +
+  labs(title="Total Actual Wins (2003 - 2016)", x="Team", y="Total Actual Wins")
+
+top_5_actual_wins <- by_team %>%
+  arrange(desc(total_actual_wins)) %>%
+  select(team) %>% 
+  rename(Top_5 = team)
+top_5_actual_wins %>% head(5) 
+
+bottom_5_actual_wins <- by_team %>%
+  arrange(total_actual_wins) %>%
+  select(team) %>% 
+  rename(Bottom_5 = team)
+bottom_5_actual_wins %>% head(5) 
+```
+
+####Total Actual vs Predicted Wins
+#####Because the numbers are slightly more negative, this again suggests that the Under would pay off more often. 
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=TRUE, include=TRUE, echo = TRUE, comment=NA}
+by_team_sort_3 <- by_team %>%
+  arrange(total_actual_vs_predicted) %>% 
+  mutate(team_ordered = factor(team, levels = team))
+
+by_team_sort_3 %>%
+  ggplot(aes(team_ordered, total_actual_vs_predicted)) +
+  geom_bar(stat = "identity", fill = "orange") +
+  geom_hline(aes(yintercept = median(total_actual_vs_predicted)), color = "red", linetype=2, size = 1) +
+  theme_light() +
+  coord_flip() +
+  labs(title="Total Actual vs Predicted Wins (2003 - 2016)", x="Team", y="Total Actual vs Predicted Wins")
+
+top_5_actual_vs_predicted <- by_team %>%
+  arrange(desc(total_actual_vs_predicted)) %>%
+  select(team) %>% 
+  rename(Top_5 = team)
+top_5_actual_vs_predicted %>% head(5) 
+
+bottom_5_actual_vs_predicted <- by_team %>%
+  arrange(total_actual_vs_predicted) %>%
+  select(team) %>% 
+  rename(Bottom_5 = team)
+bottom_5_actual_vs_predicted %>% head(5) 
+```
+
+####Total Futures Win Miss
+#####This shows the teams that have been more and less predictable. The Buffalo Bills really stand out as a team that the sportsbooks seems to predict very accurately. 
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=TRUE, include=TRUE, echo = TRUE, comment=NA}
+by_team_sort_4 <- by_team %>%
+  arrange(total_futures_win_miss) %>% 
+  mutate(team_ordered = factor(team, levels = team))
+
+by_team_sort_4 %>%
+  ggplot(aes(team_ordered, total_futures_win_miss)) +
+  geom_bar(stat = "identity", fill = "orange") +
+  geom_hline(aes(yintercept = median(total_futures_win_miss)), color = "red", linetype=2, size = 1) +
+  theme_light() +
+  coord_flip() +
+  labs(title="Total Futures Win Miss (2003 - 2016)", x="Team", y="Total Futures Win Miss")
+
+top_5_futures_win_miss <- by_team %>%
+  arrange(desc(total_futures_win_miss)) %>%
+  select(team) %>% 
+  rename(Top_5 = team)
+top_5_futures_win_miss %>% head(5) 
+
+bottom_5_futures_win_miss <- by_team %>%
+  arrange(total_futures_win_miss) %>%
+  select(team) %>% 
+  rename(Bottom_5 = team)
+bottom_5_futures_win_miss %>% head(5) 
+```
+
+####Total Point Differential
+#####This chart shows, by point differential, how dominant the New England Patriots have been. 
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=TRUE, include=TRUE, echo = TRUE, comment=NA}
+by_team_sort_5 <- by_team %>%
+  arrange(total_point_differential) %>% 
+  mutate(team_ordered = factor(team, levels = team))
+
+by_team_sort_5 %>%
+  ggplot(aes(team_ordered, total_point_differential)) +
+  geom_bar(stat = "identity", fill = "orange") +
+  geom_hline(aes(yintercept = median(total_point_differential)), color = "red", linetype=2, size = 1) +
+  theme_light() +
+  coord_flip() +
+  labs(title="Total Point Differential (2003 - 2016)", x="Team", y="Total Point Differential")
+
+top_5_point_differential <- by_team %>%
+  arrange(desc(total_point_differential)) %>%
+  select(team) %>% 
+  rename(Top_5 = team)
+top_5_point_differential %>% head(5) 
+
+bottom_5_point_differential <- by_team %>%
+  arrange(total_point_differential) %>%
+  select(team) %>% 
+  rename(Bottom_5 = team)
+bottom_5_point_differential %>% head(5) 
+```
+
+##Part 3 - Post Interactive Statistics on Shiny App
+####https://ski2488.shinyapps.io/Final_Project/
+
+```{r, warning=FALSE, message=FALSE, error=FALSE, eval=FALSE, include=TRUE, echo = TRUE, comment=NA}
+shinyUI(fluidPage(
+  titlePanel("Historical NFL Football Statistics"),
+  sidebarLayout(sidebarPanel(
+    sliderInput(
+      "theNumberSlider",
+      h3(strong("Year Range: "), style = "color:darkblue"),
+      min = 2003,
+      max = 2016,
+      value = c(2003,2016)
+    ),
+    selectInput("teamSelector",
+                h3(strong("Select Team:"), style = "color:darkblue"),
+                choice = c("Arizona Cardinals", "Atlanta Falcons", "Baltimore Ravens", "Buffalo Bills", "Carolina Panthers", "Chicago Bears",
+                           "Cincinnati Bengals", "Cleveland Browns", "Dallas Cowboys", "Denver Broncos", "Detroit Lions", "Green Bay Packers",
+                           "Houston Texans", "Indianapolis Colts", "Jacksonville Jaguars", "Kansas City Chiefs", "Los Angeles Rams",
+                           "Miami Dolphins", "Minnesota Vikings", "New England Patriots", "New Orleans Saints", "New York Giants",
+                           "New York Jets", "Oakland Raiders", "Philadelphia Eagles", "Pittsburgh Steelers", "San Diego Chargers",
+                           "San Francisco 49ers", "Seattle Seahawks", "Tampa Bay Buccaneers", "Tennessee Titans", "Washington Redskins"
+                ),
+                selected = "Arizona Cardinals"),
+    actionButton(inputId = "click",
+                 label = em(strong("Run Update")), style = "color:red"),
+    fluidRow(
+      h3(strong("Key Statisitics:"), style = "color:darkblue")),
+    fluidRow(
+      h4("Total Predicted Wins"),
+      textOutput("showFutures")),
+    fluidRow(
+      h4("Total Actual Wins"),
+      textOutput("ShowWins")),
+    fluidRow(
+      h4("Actual Wins vs Predicted Wins"),
+      textOutput("showActualvsPred")),
+    fluidRow(
+      h4("Absolute Actual Wins vs Predicted Wins"),
+      textOutput("showAbsActualvsPred")),
+    fluidRow(
+      h4("Total Point Differential"),
+      textOutput("showPointDiff")),
+    fluidRow(
+      h4("Percentage Over"),
+      textOutput("showOver")),
+    fluidRow(
+      h4("Percentage Under"),
+      textOutput("showUnder")),
+    fluidRow(
+      h4("Percentage Push"),
+      textOutput("showPush"))
+    ),
+  mainPanel(
+    column(3,plotOutput("showPlot")),
+    column(3,plotOutput("showPlot2")),
+    column(3,plotOutput("showPlot3")),
+    column(3,plotOutput("showPlot4")),
+    column(3,plotOutput("showPlot5")),
+    column(3,plotOutput("showPlot6")),
+    column(3,plotOutput("showPlot7")),
+    column(3,plotOutput("showPlot8")),
+    tableOutput("showTheTable")
+  ))
+))
+
+shinyServer(function(input, output) {
+  team_filter <- eventReactive (input$click, {
+    joined_data %>% 
+      filter(year >= input$theNumberSlider[1] & year <= input$theNumberSlider[2] & team == input$teamSelector) %>% 
+      select(-team, -odds_over, -odds_under, -last_year_wins_f:-points_against, -last_year_wins_s:-last_year_point_differential)
+  })
+  all_filter_1 <- eventReactive (input$click, {
+    joined_data %>%
+      filter(year >= input$theNumberSlider[1] & year <= input$theNumberSlider[2]) %>%
+      group_by(team) %>%
+      summarise(stat = sum(predicted_wins, na.rm = TRUE)) %>% 
+      arrange(stat) %>% 
+      mutate(team_ordered = factor(team, levels = team))
+  })
+  all_filter_2 <- eventReactive (input$click, {
+    joined_data %>%
+      filter(year >= input$theNumberSlider[1] & year <= input$theNumberSlider[2]) %>%
+      group_by(team) %>%
+      summarise(stat = sum(actual_wins, na.rm = TRUE)) %>% 
+      arrange(stat) %>% 
+      mutate(team_ordered = factor(team, levels = team))
+  })
+  all_filter_3 <- eventReactive (input$click, {
+    joined_data %>%
+      filter(year >= input$theNumberSlider[1] & year <= input$theNumberSlider[2]) %>%
+      group_by(team) %>%
+      summarise(stat = sum(actual_vs_predicted, na.rm = TRUE)) %>% 
+      arrange(stat) %>% 
+      mutate(team_ordered = factor(team, levels = team))
+  })
+  all_filter_4 <- eventReactive (input$click, {
+    joined_data %>%
+      filter(year >= input$theNumberSlider[1] & year <= input$theNumberSlider[2]) %>%
+      group_by(team) %>%
+      summarise(stat = sum(absolute_actual_vs_predicted, na.rm = TRUE)) %>% 
+      arrange(stat) %>% 
+      mutate(team_ordered = factor(team, levels = team))
+  })
+  total_futures <- eventReactive (input$click, {
+    joined_data %>%
+      group_by(team) %>% 
+      filter(year >= input$theNumberSlider[1] & year <= input$theNumberSlider[2] & team == input$teamSelector) %>% 
+      summarise(total = sum(predicted_wins)) %>% 
+      select(total)
+  })
+  team_change <- eventReactive (input$click, {
+    input$teamSelector
+  })
+  total_wins <- eventReactive (input$click, {
+    joined_data %>%
+      group_by(team) %>% 
+      filter(year >= input$theNumberSlider[1] & year <= input$theNumberSlider[2] & team == input$teamSelector) %>% 
+      summarise(total = sum(actual_wins)) %>% 
+      select(total)
+  })
+  total_actual_vs_pred <- eventReactive (input$click, {
+    joined_data %>%
+      group_by(team) %>% 
+      filter(year >= input$theNumberSlider[1] & year <= input$theNumberSlider[2] & team == input$teamSelector) %>% 
+      summarise(total = sum(actual_vs_predicted)) %>% 
+      select(total)
+  })
+  total_abs_actual_vs_pred <- eventReactive (input$click, {
+    joined_data %>%
+      group_by(team) %>% 
+      filter(year >= input$theNumberSlider[1] & year <= input$theNumberSlider[2] & team == input$teamSelector) %>% 
+      summarise(total = sum(absolute_actual_vs_predicted)) %>% 
+      select(total)
+  })
+  total_point_diff <- eventReactive (input$click, {
+    joined_data %>%
+      group_by(team) %>% 
+      filter(year >= input$theNumberSlider[1] & year <= input$theNumberSlider[2] & team == input$teamSelector) %>% 
+      summarise(total = sum(point_differential)) %>% 
+      select(total)
+  })
+  total_perc_over <- eventReactive (input$click, {
+    joined_data %>%
+      group_by(team) %>% 
+      filter(year >= input$theNumberSlider[1] & year <= input$theNumberSlider[2] & team == input$teamSelector) %>% 
+      summarise(total = sum(result == "Over", na.rm = TRUE) / (sum(result == "Over", na.rm = TRUE) + sum(result == "Under", na.rm = TRUE) + sum(result == "Push", na.rm = TRUE))) %>% 
+      select(total)
+  })
+  total_perc_under <- eventReactive (input$click, {
+    joined_data %>%
+      group_by(team) %>% 
+      filter(year >= input$theNumberSlider[1] & year <= input$theNumberSlider[2] & team == input$teamSelector) %>% 
+      summarise(total = sum(result == "Under", na.rm = TRUE) / (sum(result == "Over", na.rm = TRUE) + sum(result == "Under", na.rm = TRUE) + sum(result == "Push", na.rm = TRUE))) %>% 
+      select(total)
+  })
+  total_perc_push <- eventReactive (input$click, {
+    joined_data %>%
+      group_by(team) %>% 
+      filter(year >= input$theNumberSlider[1] & year <= input$theNumberSlider[2] & team == input$teamSelector) %>% 
+      summarise(total = sum(result == "Push", na.rm = TRUE) / (sum(result == "Over", na.rm = TRUE) + sum(result == "Under", na.rm = TRUE) + sum(result == "Push", na.rm = TRUE))) %>% 
+      select(total)
+  })
+  
+  observeEvent(input$click, {
+    output$showTeam <- renderText({team_change()
+    })
+    output$showFutures <- renderText({sum(total_futures())
+    })
+    output$ShowWins <- renderText({sum(total_wins())
+    })
+    output$showActualvsPred <- renderText({sum(total_actual_vs_pred())
+    })
+    output$showAbsActualvsPred <- renderText({sum(total_abs_actual_vs_pred())
+    })
+    output$showPointDiff <- renderText({sum(total_point_diff())
+    })
+    output$showOver <- renderText({sum(total_perc_over())
+    })
+    output$showUnder <- renderText({sum(total_perc_under())
+    })
+    output$showPush <- renderText({sum(total_perc_push())
+    })
+    output$showTheTable <- renderTable({team_filter()
+    })
+    output$showPlot <- renderPlot({team_filter() %>% 
+        ggplot() +
+        geom_histogram(aes(predicted_wins), fill = "orange", color = "black", binwidth = .5, show.legend = FALSE) +
+        scale_x_continuous(breaks = seq(0,16,.5)) +
+        theme_light() +
+        labs(title="Predicted Wins", x="", y="Total Count")
+    })
+    output$showPlot2 <- renderPlot({team_filter() %>% 
+        ggplot() +
+        geom_histogram(aes(actual_wins), fill = "blue", color = "black", binwidth = 1, show.legend = FALSE) +
+        scale_x_continuous(breaks = seq(0,16,1)) +
+        theme_light() +
+        labs(title="Actual Wins", x="", y="")
+    })
+    output$showPlot3 <- renderPlot({team_filter() %>% 
+        ggplot() +
+        geom_histogram(aes(actual_vs_predicted), fill = "green", color = "black", binwidth = .5, show.legend = FALSE) +
+        scale_x_continuous(breaks = seq(-10,10)) +
+        theme_light() +
+        labs(title="Actual vs Predicted", x="", y="")
+    })
+    output$showPlot4 <- renderPlot({team_filter() %>% 
+        ggplot() +
+        geom_histogram(aes(absolute_actual_vs_predicted), fill = "gray", color = "black", binwidth = .5, show.legend = FALSE) +
+        scale_x_continuous(breaks = seq(0,16,.5)) +
+        theme_light() +
+        labs(title="Absolute Actual vs Predicted", x="", y="")
+    })
+    output$showPlot5 <- renderPlot({all_filter_1() %>%
+        ggplot(aes(team_ordered, stat)) +
+        geom_bar(stat = "identity", fill = "orange") +
+        geom_hline(aes(yintercept = median(stat)), color = "red", linetype=2, size = 1) +
+        theme_light() +
+        coord_flip() +
+        labs(title="", x="Team", y="Predicted Wins")
+    })
+    output$showPlot6 <- renderPlot({all_filter_2() %>%
+        ggplot(aes(team_ordered, stat)) +
+        geom_bar(stat = "identity", fill = "blue") +
+        geom_hline(aes(yintercept = median(stat)), color = "red", linetype=2, size = 1) +
+        theme_light() +
+        coord_flip() +
+        labs(title="", x="", y="Actual Wins")
+    })
+    output$showPlot7 <- renderPlot({all_filter_3() %>%
+        ggplot(aes(team_ordered, stat)) +
+        geom_bar(stat = "identity", fill = "green") +
+        geom_hline(aes(yintercept = median(stat)), color = "red", linetype=2, size = 1) +
+        theme_light() +
+        coord_flip() +
+        labs(title="", x="", y="Actual vs Predicted")
+    })
+    output$showPlot8 <- renderPlot({all_filter_4() %>%
+        ggplot(aes(team_ordered, stat)) +
+        geom_bar(stat = "identity", fill = "gray") +
+        geom_hline(aes(yintercept = median(stat)), color = "red", linetype=2, size = 1) +
+        theme_light() +
+        coord_flip() +
+        labs(title="", x="", y="Absolute Actual vs Predicted")
+    })
+})
+})
+```
+
+
